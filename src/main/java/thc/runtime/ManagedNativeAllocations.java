@@ -142,6 +142,34 @@ public final class ManagedNativeAllocations {
         @TruffleBoundary public long accessLong(ToLongFunction<MemorySegment> body) {
             try (var loan = borrow()) { return body.applyAsLong(loan.segment()); }
         }
+        /**
+         * The unsigned native-endian value of {@code width} bytes at {@code elementOffset *
+         * stride} past {@code base}, with a borrowed read's checks in its order (liveness,
+         * offset overflow, bounds), holding the read lock only for the load and allocating
+         * no Borrow.
+         */
+        @TruffleBoundary public long readScalar(long base, long elementOffset, int stride, int width) {
+            current();
+            var lock = lifetime.readLock();
+            lock.lock();
+            try {
+                if (closed) throw fault("Native allocation is freed");
+                if (elementOffset < Long.MIN_VALUE / stride || elementOffset > Long.MAX_VALUE / stride)
+                    throw fault("Managed Addr# element offset overflow");
+                long start;
+                try { start = Math.addExact(base, elementOffset * stride); }
+                catch (ArithmeticException failure) { throw fault("Managed Addr# offset overflow"); }
+                if (start < 0 || start > size || width > size - start)
+                    throw fault("Managed Addr# range outside its backing storage");
+                return switch (width) {
+                    case 1 -> segment.get(ValueLayout.JAVA_BYTE, start) & 0xffL;
+                    case 2 -> segment.get(ValueLayout.JAVA_SHORT_UNALIGNED, start) & 0xffffL;
+                    case 4 -> segment.get(ValueLayout.JAVA_INT_UNALIGNED, start) & 0xffff_ffffL;
+                    case 8 -> segment.get(ValueLayout.JAVA_LONG_UNALIGNED, start);
+                    default -> throw fault("Unsupported native scalar width " + width);
+                };
+            } finally { lock.unlock(); }
+        }
     }
 
     @TruffleBoundary

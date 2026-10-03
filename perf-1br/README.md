@@ -35,11 +35,15 @@ complete Core, cabal 3.16.1, clang 18.1.8, GraalVM 25.3.4.1.
 
 ## Results
 
-| commit | THC tests | 1br tests | 10M, defaults | 1B, tuned |
-|--------|-----------|-----------|---------------|-----------|
-| `0ae57cbf` (THC upstream) | baseline | 65/65 | 37.7 s | 154.5 to 166.3 s, via a patched launcher |
-| launcher settings overridable | no new failures | 65/65 | 39.1 s | 168.4 s, 2250 s CPU |
-| liveness without the lock | no new failures | 65/65 | 34.6 s | 130.4 s, 1802 s CPU |
+| commit | THC tests | 1br tests | 10M, defaults | 1B, tuned | 1B allocated |
+|--------|-----------|-----------|---------------|-----------|--------------|
+| `0ae57cbf` (THC upstream) | baseline | 65/65 | 37.7 s | 154.5 to 166.3 s, via a patched launcher | |
+| launcher settings overridable | no new failures | 65/65 | 39.1 s | 168.4 s, 2250 s CPU | |
+| liveness without the lock | no new failures | 65/65 | 34.6 s | 130.4 s, 1802 s CPU | 340 GB |
+| scalar reads in one locked load | no new failures | 65/65 | 34.6 s | 112.4 s, 1477 s CPU | 275 GB |
+
+Allocation is the heap growth between collections summed over a
+`-Xlog:gc` log of the same run.
 
 ## Liveness without the lock
 
