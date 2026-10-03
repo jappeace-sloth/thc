@@ -41,6 +41,7 @@ complete Core, cabal 3.16.1, clang 18.1.8, GraalVM 25.3.4.1.
 | launcher settings overridable | no new failures | 65/65 | 39.1 s | 168.4 s, 2250 s CPU | |
 | liveness without the lock | no new failures | 65/65 | 34.6 s | 130.4 s, 1802 s CPU | 340 GB |
 | scalar reads in one locked load | no new failures | 65/65 | 34.6 s | 112.4 s, 1477 s CPU | 275 GB |
+| launcher metrics only for diagnostics | no new failures | 65/65 | 36.6 s | 88.4 s, 1090 s CPU | 271 GB |
 
 Allocation is the heap growth between collections summed over a
 `-Xlog:gc` log of the same run.
@@ -74,3 +75,13 @@ failing free      counter   blocked, then LIVE
 
 The flag version failed `AtomicAddressTest.pointerValidationDoesNotHoldCellMonitorBehindQueuedNativeFree`
 in the address gate, which is how the queued case was found.
+
+## Launcher metrics
+
+A steady-state JFR profile of a billion-row run with the scalar-read
+change attributed 3.8% of CPU samples to `AtomicLong.incrementAndGet`
+in `Metrics.incrementTailBounces`: the launcher enabled THC's metrics on
+every IO launch although it prints them only under `-Dthc.diagnostics`.
+Turning them off unless requested saved 21% of wall time, far more than
+the samples suggested, because sixteen threads were contending for the
+same counters' cache lines.
