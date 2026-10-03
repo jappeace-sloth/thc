@@ -16,6 +16,7 @@ import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Function;
 import java.util.function.ToIntFunction;
@@ -49,6 +50,9 @@ public final class ManagedNativeAllocations {
         private final Arena arena = Arena.ofShared();
         private final MemorySegment segment;
         private boolean closed;
+        // Counts frees requested before they queue on the write lock; a failed free gives its
+        // request back, a successful one keeps it.
+        private final AtomicInteger releaseRequests = new AtomicInteger();
 
         Owner(MemorySegment pointer, long size) { this(pointer, size, Allocator.MALLOC); }
         Owner(MemorySegment pointer, long size, Allocator allocator) {
@@ -104,6 +108,7 @@ public final class ManagedNativeAllocations {
         @TruffleBoundary
         void release() {
             requireFreeable();
+            releaseRequests.incrementAndGet();
             lifetime.writeLock().lock();
             try {
                 if (closed) return;
@@ -112,10 +117,22 @@ public final class ManagedNativeAllocations {
                 else releaseNative(pointer);
                 closed = true;
                 arena.close();
-            } finally { lifetime.writeLock().unlock(); }
+            } finally {
+                if (!closed) releaseRequests.decrementAndGet();
+                lifetime.writeLock().unlock();
+            }
         }
 
-        @TruffleBoundary public void requireLive() { try (var ignored = borrow()) {} }
+        /**
+         * Before any free has been requested the memory cannot be freed, so this answers
+         * without the lock. Once one is requested, even if it is still queued behind a
+         * borrow, the fair borrow waits behind it and answers exactly as before.
+         */
+        @TruffleBoundary public void requireLive() {
+            current();
+            if (releaseRequests.get() == 0) return;
+            try (var ignored = borrow()) {}
+        }
         @TruffleBoundary public <T> T access(Function<MemorySegment, T> body) {
             try (var loan = borrow()) { return body.apply(loan.segment()); }
         }
