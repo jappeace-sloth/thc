@@ -131,6 +131,20 @@ public class NativeAddressTest {
             }
         }
     }
+    @Test public void pinnedBufferBaseProjectsOncePerCallAndAgainAfterIt() {
+        try (var context = context()) {
+            context.initialize("thc"); context.enter();
+            try {
+                var address = ManagedAddress.fromGuestByteArray(PinnedMemory.allocate(64, 64)).plus(8);
+                var lease = new PackagePointerLease(); var base = new PackageScalarAccess.PinnedBase(address, lease);
+                long bits = base.getAsLong(); assertEquals(address.toNativeBits() - 8, bits);
+                NativeAddresses.current(null).close();
+                assertEquals(bits, base.getAsLong(), "conversions during the call reuse its projection");
+                lease.open = false;
+                assertThrows(RuntimeFault.class, base::getAsLong, "after the call a conversion projects, and is checked, again");
+            } finally { context.leave(); }
+        }
+    }
     private Context context() { return context(true, false); }
     private Context context(boolean nativeAccess, boolean inlining) {
         return Context.newBuilder("thc").allowNativeAccess(nativeAccess).allowExperimentalOptions(true).option("compiler.Inlining", Boolean.toString(inlining))

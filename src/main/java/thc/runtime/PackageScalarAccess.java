@@ -136,6 +136,25 @@ public final class PackageScalarAccess extends Node {
         try { return Calls.interop(calls, entry.getReceiver(), arguments); }
         finally { libraries.captureErrno(); }
     }
+    /**
+     * A pinned buffer's native base for C. The storage cannot move while the call holds its lease,
+     * so every pointer conversion during the call (Sulong converts on each access) reuses one
+     * projection; after the call each conversion projects, and is checked, again.
+     * Only CbitsBuffer's synchronized pointer messages call it.
+     */
+    static final class PinnedBase implements LongSupplier {
+        private final ManagedAddress address;
+        private final PackagePointerLease lease;
+        private long base;
+        private boolean projected;
+        PinnedBase(ManagedAddress address, PackagePointerLease lease) { this.address = address; this.lease = lease; }
+        @Override public long getAsLong() {
+            if (projected && lease.open) return base;
+            base = address.toNativeBits() - address.cbitsOffset();
+            projected = true;
+            return base;
+        }
+    }
     private static final class PointerBuffer {
         ManagedAddress address;
         boolean writable;
@@ -195,8 +214,7 @@ public final class PackageScalarAccess extends Node {
                         return image;
                     };
                     var owner = address.cbitsOwner();
-                    LongSupplier nativeAddress = owner != null && owner.hasNativeStorage()
-                        ? () -> address.toNativeBits() - address.cbitsOffset() : null;
+                    LongSupplier nativeAddress = owner != null && owner.hasNativeStorage() ? new PinnedBase(address, lease) : null;
                     buffer.transport = new CbitsBuffer(address.cbitsBuffer(), buffer.writable,
                         () -> address.cbitsSize(), 0, nativeImage, nativeAddress, address.cbitsStorageKey());
                 }
