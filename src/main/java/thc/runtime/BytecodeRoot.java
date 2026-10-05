@@ -1290,6 +1290,27 @@ public abstract class BytecodeRoot extends GuestRoot implements BytecodeRootNode
         }
     }
 
+    /** {@code readXOffAddr# (plusAddr# address displacement) 0#} as one operation; see readDisplaced. */
+    @Operation
+    @ConstantOperand(type = ManagedAddressRead.class, name = "operation")
+    @ConstantOperand(type = LocalAccessor.class, name = "destination")
+    public static final class ReadManagedAddressPlus {
+        @Specialization(guards = "operation.isInt()") public static void readInt(VirtualFrame frame, ManagedAddressRead operation,
+                LocalAccessor destination, ManagedAddress address, long displacement, Object state,
+                @Bind("$node") Node node) {
+            ManagedByteArray.requireState(state);
+            destination.setInt(((BytecodeRoot) node.getRootNode()).getBytecodeNode(), frame,
+                operation.readIntDisplaced(address, displacement));
+        }
+        @Specialization(guards = "!operation.isInt()") public static void read(VirtualFrame frame, ManagedAddressRead operation,
+                LocalAccessor destination, ManagedAddress address, long displacement, Object state,
+                @Bind("$node") Node node) {
+            ManagedByteArray.requireState(state);
+            long value = operation.readDisplaced(address, displacement);
+            destination.setLong(((BytecodeRoot) node.getRootNode()).getBytecodeNode(), frame, value);
+        }
+    }
+
     @Operation @ConstantOperand(type = boolean.class, name = "byteOffset")
     @ConstantOperand(type = LocalAccessor.class, name = "destination")
     public static final class ReadFloatOffAddr {

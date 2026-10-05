@@ -1681,9 +1681,9 @@ Under build/managed-address-reads/:
     OUT executable/native intermediates.
   oracle.tsv: IN executable/request string; OUT native results.
   pre-core/ManagedAddressReadAudit.cbd, post-core/same plus interface closure
-    IN source/exporter, four read roots; OUT CBDs and stage-ghc/ intermediates.
-  <stage>-{word32Read,wordRead,int32Read,intRead}.audit.json
-    IN whole stage core directory/auditor/data; OUT eight reports.
+    IN source/exporter, six read roots; OUT CBDs and stage-ghc/ intermediates.
+  <stage>-{word32Read,wordRead,int32Read,intRead,word64PlusRead,int32PlusRead}.audit.json
+    IN whole stage core directory/auditor/data; OUT twelve reports.
   manifest.json: IN executable/requests/TSV, listed stage CBDs/reports and source
     receipt; OUT hashes. Tests read these artifacts and receipt paths.
 Whole-directory audit inputs are open-ended; source receipt omits import-time tables.

@@ -24,6 +24,8 @@ run tokens@[name, raw, base, offset] = do
           "wordRead" -> I# (A.wordRead x b o)
           "int32Read" -> I# (A.int32Read x b o)
           "intRead" -> I# (A.intRead x b o)
+          "word64PlusRead" -> I# (A.word64PlusRead x b o)
+          "int32PlusRead" -> I# (A.int32PlusRead x b o)
           _ -> error "unknown address-read fixture"
   putStrLn (concatMap (++ "\t") tokens ++ show result)
 run _ = error "invalid address-read request"

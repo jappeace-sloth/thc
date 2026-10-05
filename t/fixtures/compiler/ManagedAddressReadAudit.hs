@@ -90,3 +90,43 @@ intRead raw baseOffset elementOffset = runRW# (\s0 ->
       (# v, I# ((before) *# 3# +# (after) *# 5#) #)
     } } }) of { (# _, I# result #) -> result }
   } } } } } } })
+
+-- The first read is peekByteOff's shape, readXOffAddr# (plusAddr# a d) 0#,
+-- which the bytecode backend lowers to one fused read; the second uses the
+-- ordinary form, so common-subexpression elimination cannot merge the two.
+
+word64PlusRead :: Int# -> Int# -> Int# -> Int#
+word64PlusRead raw baseOffset elementOffset = runRW# (\s0 ->
+  case newAlignedPinnedByteArray# 32# 8# s0 of { (# s1, mutable #) ->
+  case writeWordArray# mutable 0# (int2Word# raw) s1 of { s2 ->
+  case writeWordArray# mutable 1# (xor# (int2Word# raw) 81985529216486895##) s2 of { s3 ->
+  case writeWordArray# mutable 2# (xor# (int2Word# raw) 18446744073709551615##) s3 of { s4 ->
+  case writeWordArray# mutable 3# (xor# (int2Word# raw) 12297829382473034410##) s4 of { s5 ->
+  case unsafeFreezeByteArray# mutable s5 of { (# s6, bytes #) ->
+  case plusAddr# (byteArrayContents# bytes) baseOffset of { address ->
+  case keepAlive# bytes s6 (\s ->
+    case readWord64OffAddr# (plusAddr# address (elementOffset *# 8#)) 0# s of { (# t, before #) ->
+    case writeWord8OffAddr# address (elementOffset *# 8#)
+           (wordToWord8# (int2Word# (raw +# 173#))) t of { u ->
+    case readWord64OffAddr# address elementOffset u of { (# v, after #) ->
+      (# v, I# ((word2Int# (word64ToWord# before)) *# 3# +# (word2Int# (word64ToWord# after)) *# 5#) #)
+    } } }) of { (# _, I# result #) -> result }
+  } } } } } } })
+
+int32PlusRead :: Int# -> Int# -> Int# -> Int#
+int32PlusRead raw baseOffset elementOffset = runRW# (\s0 ->
+  case newAlignedPinnedByteArray# 32# 8# s0 of { (# s1, mutable #) ->
+  case writeWordArray# mutable 0# (int2Word# raw) s1 of { s2 ->
+  case writeWordArray# mutable 1# (xor# (int2Word# raw) 81985529216486895##) s2 of { s3 ->
+  case writeWordArray# mutable 2# (xor# (int2Word# raw) 18446744073709551615##) s3 of { s4 ->
+  case writeWordArray# mutable 3# (xor# (int2Word# raw) 12297829382473034410##) s4 of { s5 ->
+  case unsafeFreezeByteArray# mutable s5 of { (# s6, bytes #) ->
+  case plusAddr# (byteArrayContents# bytes) baseOffset of { address ->
+  case keepAlive# bytes s6 (\s ->
+    case readInt32OffAddr# (plusAddr# address (elementOffset *# 4#)) 0# s of { (# t, before #) ->
+    case writeWord8OffAddr# address (elementOffset *# 4#)
+           (wordToWord8# (int2Word# (raw +# 173#))) t of { u ->
+    case readInt32OffAddr# address elementOffset u of { (# v, after #) ->
+      (# v, I# ((int32ToInt# before) *# 3# +# (int32ToInt# after) *# 5#) #)
+    } } }) of { (# _, I# result #) -> result }
+  } } } } } } })

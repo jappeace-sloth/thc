@@ -85,6 +85,8 @@ public final class ManagedAddress {
     long readNativeScalar(long elementOffset, int stride, int width) {
         return nativeOwner.readScalar(offset, elementOffset, stride, width);
     }
+    /** Plain malloc'd storage that plus offsets in place, without recovering a numeric alias. */
+    boolean plainNativeOffsetStorage() { return plainNativeStorage() && numeric == null; }
     public <T> T withNativeBorrow(Supplier<T> body) {
         try (var loan = borrow()) { return body.get(); }
     }

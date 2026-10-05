@@ -148,10 +148,37 @@ public class NativeMallocTest {
         return map("id", name, "name", name, "arity", arguments.size(), "lifted", true, "rep", closure, "expr",
             list("lam", formals, body, map("rep", closure, "resultRep", output == null ? longRep : result)));
     }
+    private static List<Object> variable(Map<String, Object> formal) {
+        return list("var", formal.get("id"), map("rep", formal.get("rep")));
+    }
+    /** {@code name a d s = case primitive (plusAddr# a d) 0# s of (# _, value #) -> value}: peekByteOff's shape. */
+    private Map<String, Object> displacedRead(String name, String primitive, String output) {
+        var address = map("id", name + "-address", "lifted", false, "rep", rep("AddrRep"));
+        var displacement = map("id", name + "-displacement", "lifted", false, "rep", rep("IntRep"));
+        var state = map("id", name + "-state", "lifted", false, "rep", rep(null));
+        var value = rep(output);
+        var tuple = map("aggregate", "unboxed-tuple", "components", List.of(rep(null), value), "evaluated", false,
+            "kind", "unknown", "primReps", List.of(output));
+        var plus = list("app", list("prim", "plusAddr#"), List.of(variable(address), variable(displacement)),
+            List.of(false, false), false, false, map("rep", rep("AddrRep")));
+        var read = list("app", list("prim", primitive),
+            List.of(plus, list("lit", "int", "0", map("rep", longRep)), variable(state)),
+            List.of(false, false, false), false, false, map("rep", tuple));
+        var ids = List.of(name + "-after", name + "-value");
+        var binders = List.of(map("id", ids.get(0), "lifted", false, "rep", rep(null)),
+            map("id", ids.get(1), "lifted", false, "rep", value));
+        var body = list("case", read, name + "-tuple",
+            list(list("data", "tuple2", ids, list("var", ids.get(1), map("rep", value)), map("binders", binders))),
+            map("rep", value, "binder", map("id", name + "-tuple", "lifted", false, "rep", plus(tuple, "evaluated", true))));
+        return map("id", name, "name", name, "arity", 3, "lifted", true, "rep", closure, "expr",
+            list("lam", List.of(address, displacement, state), body, map("rep", closure, "resultRep", value)));
+    }
     private List<Map<String, Object>> memoryBindings() {
         return List.of(
             binding("store", "writeWord64OffAddr#", Arrays.asList("AddrRep", "IntRep", "Word64Rep", null), null),
             binding("load", "indexWord64OffAddr#", List.of("AddrRep", "IntRep"), "Word64Rep"),
+            displacedRead("loadPlus", "readWord64OffAddr#", "Word64Rep"),
+            displacedRead("loadPlus32", "readInt32OffAddr#", "Int32Rep"),
             binding("loadByte", "indexWord8OffAddr#", List.of("AddrRep", "IntRep"), "Word8Rep"),
             binding(
                 "copy", "copyAddrToAddrNonOverlapping#", Arrays.asList("AddrRep", "AddrRep", "IntRep", null), null));
@@ -322,7 +349,7 @@ public class NativeMallocTest {
                 assertEquals(List.of(0L, 1L, 2L, 197L), oracle.stream().map(it -> it.get(0)).toList());
                 var program = load(language, backend, module());
                 var targets = new LinkedHashMap<String, RootCallTarget>();
-                for (String name : List.of("malloc", "free", "store", "load", "copy"))
+                for (String name : List.of("malloc", "free", "store", "load", "loadPlus", "loadPlus32", "copy"))
                     targets.put(name, program.entryTarget(name));
                 var registry = Language.currentState().getNativeAllocations();
                 class Exercise {
@@ -351,6 +378,10 @@ public class NativeMallocTest {
                         assertEquals(seed & 255, base.readWord8(7));
                         assertEquals(23L, call("store", base, 1L, seed * 257, INSTANCE));
                         assertEquals(seed * 257, call("load", base, 1L));
+                        // The fused read serves malloc'd memory itself: same value, and bounds still fault.
+                        assertEquals(seed * 257, ((Number) call("loadPlus", base, 8L, INSTANCE)).longValue());
+                        assertEquals((long) (int) (seed * 257), ((Number) call("loadPlus32", base, 8L, INSTANCE)).longValue());
+                        if (!compiled) assertThrows(RuntimeFault.class, () -> call("loadPlus", base, 20L, INSTANCE));
                         var copy = (ManagedAddress) call("malloc", 24L, INSTANCE);
                         assertEquals(23L, call("copy", base, copy, 24L, INSTANCE));
                         assertEquals(base.readWord8(7), copy.readWord8(7));
@@ -376,6 +407,8 @@ public class NativeMallocTest {
                         "First compilation of " + backend + "/" + entry.getKey());
                     valid(target);
                 }
+                if (backend.equals("bytecode"))
+                    assertTrue(program.bytecodeDump().contains("c.ReadManagedAddressPlus"), "loadPlus must lower to the fused read");
                 exercise.compiled = true;
                 exercise.run(197);
                 assertEquals(23L, exercise.call("free", ManagedAddress.nullAddress(), INSTANCE));
@@ -520,6 +553,36 @@ public class NativeMallocTest {
             registry.free(base);
             for (var operation : ManagedAddressRead.values())
                 assertThrows(RuntimeFault.class, () -> scalarRead(operation, base, 0));
+        });
+    }
+    private static Object outcome(java.util.function.LongSupplier read) {
+        try { return read.getAsLong(); } catch (RuntimeFault fault) { return "fault"; }
+    }
+    private static long displacedRead(ManagedAddressRead operation, ManagedAddress address, long displacement) {
+        return operation.isInt() ? operation.readIntDisplaced(address, displacement) : operation.readDisplaced(address, displacement);
+    }
+    @Test
+    public void displacedReadsMatchPlusThenReadOnNativeAndHeapAddresses() throws Exception {
+        inside(language -> {
+            var registry = Language.currentState().getNativeAllocations();
+            var base = registry.malloc(32);
+            var bytes = new byte[32];
+            for (int i = 0; i < bytes.length; i++) {
+                bytes[i] = (byte) (i * 53 + 7);
+                base.writeWord8(i, bytes[i] & 255);
+            }
+            var heap = ManagedAddress.fromByteArray(bytes);
+            var displacements = new ArrayList<Long>();
+            for (long d = -10; d <= 40; d++) displacements.add(d);
+            displacements.addAll(List.of(Long.MIN_VALUE, Long.MAX_VALUE, Long.MAX_VALUE - 4, 1L << 40));
+            for (var operation : ManagedAddressRead.values())
+                for (var address : List.of(base, base.plus(5), heap, heap.plus(3)))
+                    for (long d : displacements)
+                        assertEquals(outcome(() -> scalarRead(operation, address.plus(d), 0)),
+                            outcome(() -> displacedRead(operation, address, d)), operation + "/" + d);
+            registry.free(base);
+            for (var operation : ManagedAddressRead.values())
+                assertThrows(RuntimeFault.class, () -> displacedRead(operation, base, 0));
         });
     }
     @Test

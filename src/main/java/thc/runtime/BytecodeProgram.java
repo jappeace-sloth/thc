@@ -6959,6 +6959,19 @@ public final class BytecodeProgram implements ExecutableProgram {
         return representations;
     }
 
+    private static boolean isIntZero(List<Object> expr) {
+        return expr.size() >= 3 && "lit".equals(expr.get(0)) && "int".equals(expr.get(1)) && "0".equals(expr.get(2));
+    }
+
+    /** The two operands of a saturated {@code plusAddr#} application, or null for any other expression. */
+    @SuppressWarnings("unchecked")
+    private static List<List<Object>> plusAddressOperands(List<Object> expr) {
+        if (expr.size() < 3 || !"app".equals(expr.get(0)) || !(expr.get(1) instanceof List<?> fn) || fn.size() < 2
+                || !"prim".equals(fn.get(0)) || !"plusAddr#".equals(fn.get(1)) || !(expr.get(2) instanceof List<?> operands)
+                || operands.size() != 2) return null;
+        return (List<List<Object>>) operands;
+    }
+
     private List<Expression> compileOperands(List<List<Object>> args, Scope scope) {
         var operands = new ArrayList<Expression>(args.size());
         for (var arg : args) operands.add(compile(arg, scope, false));
@@ -8089,6 +8102,21 @@ public final class BytecodeProgram implements ExecutableProgram {
             var operation = PinnedMemoryOp.named(name);
             boolean byteOffset = name.contains("Word8") && name.contains("As");
             operation.validate(argumentProofs(args), flags, tupleProof);
+            var displaced = operation.getTuple() && operation.getAddressRead() != null && !byteOffset && args.size() == 3
+                && isIntZero(args.get(1)) ? plusAddressOperands(args.get(0)) : null;
+            if (displaced != null) {
+                // peekByteOff's shape: read through plusAddr# without building the offset address.
+                // The same unlifted operand lowering a separate plusAddr# application gets.
+                var base = argument(displaced.get(0), scope, false);
+                var displacement = argument(displaced.get(1), scope, false);
+                var state = compile(args.get(2), scope, false);
+                return tupleExpression(tupleProof, (e, destination) -> {
+                    var b = e.builder;
+                    b.beginReadManagedAddressPlus(operation.getAddressRead(), destination.get(0));
+                    base.emit(e); displacement.emit(e); state.emit(e);
+                    b.endReadManagedAddressPlus();
+                });
+            }
             var operands = compileOperands(args, scope);
             if (operation.getTuple()) return tupleExpression(tupleProof, (e, destination) -> {
                 var b = e.builder;

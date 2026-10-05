@@ -38,7 +38,9 @@ entries :: [(String,String,Int)]
 entries = [("word32Read","readWord32OffAddr#",4),
            ("wordRead","readWordOffAddr#",8),
            ("int32Read","readInt32OffAddr#",4),
-           ("intRead","readIntOffAddr#",8)]
+           ("intRead","readIntOffAddr#",8),
+           ("word64PlusRead","readWord64OffAddr#",8),
+           ("int32PlusRead","readInt32OffAddr#",4)]
 
 seeds :: [Integer]
 seeds = [-2^(63 :: Int),-4294967296,-2147483649,-2147483648,-1,0,1,127,
@@ -77,7 +79,7 @@ prepareManagedAddressReads root = do
         [name,raw,base,offset,result] ->
           [name,raw,base,offset] == request && readInteger result /= Nothing
         _ -> False
-  unless (length requests == 1800 && length (lines observed) == length requests &&
+  unless (length requests == 2700 && length (lines observed) == length requests &&
           all validRow (zip requests (lines observed)))
     (die "Malformed native managed-address read oracle")
   writeFile (output </> "oracle.tsv") observed
@@ -112,6 +114,6 @@ prepareManagedAddressReads root = do
   writeJson manifest $ object ["schema" .= (1 :: Int),"ghc" .= ("9.14.1" :: String),
     "wordBits" .= (64 :: Int),"entries" .= [name | (name,_,_) <- entries],
     "nativeRows" .= length requests,"strictAccepted" .= True,
-    "strictAudits" .= (8 :: Int),"stages" .= Map.fromList stages,
+    "strictAudits" .= (12 :: Int),"stages" .= Map.fromList stages,
     "inputHashes" .= sourceHashes,"artifactHashes" .= artifactHashes]
-  putStrLn "managed-address-reads: 1800 native rows, eight strict pre/post Core audits"
+  putStrLn "managed-address-reads: 2700 native rows, twelve strict pre/post Core audits"

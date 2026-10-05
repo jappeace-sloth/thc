@@ -21,6 +21,27 @@ public enum ManagedAddressRead {
     public int getWidth() { return width; }
     public String getPayload() { return payload; }
     public boolean isInt() { return intCarrier; }
+    /**
+     * {@code readXOffAddr# (plusAddr# address displacement) 0#}. Plain malloc'd memory is
+     * read without building the offset address, with plus's then the read's checks in
+     * their order (liveness, offset overflow, bounds); any other address takes exactly
+     * the plus and the read.
+     */
+    public long readDisplaced(ManagedAddress address, long displacement) {
+        if (!intCarrier && address.plainNativeOffsetStorage()) {
+            long value = address.readNativeScalar(displacement, 1, width);
+            return this == INT16 ? (short) value : this == INT32 ? (int) value : value;
+        }
+        return read(address.plus(displacement), 0);
+    }
+    /** The narrow-carrier form of {@link #readDisplaced}. */
+    public int readIntDisplaced(ManagedAddress address, long displacement) {
+        if (intCarrier && address.plainNativeOffsetStorage()) {
+            int value = (int) address.readNativeScalar(displacement, 1, width);
+            return this == INT16 ? (short) value : value;
+        }
+        return readInt(address.plus(displacement), 0);
+    }
     public int readInt(ManagedAddress address, long elementOffset) { return readInt(address, elementOffset, false); }
     public int readInt(ManagedAddress address, long elementOffset, boolean byteOffset) {
         if (!intCarrier) throw fault("Expected a narrow address read");

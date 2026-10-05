@@ -31,6 +31,8 @@ class ManagedAddressReadTest {
         result.put("wordRead", 8);
         result.put("int32Read", 4);
         result.put("intRead", 8);
+        result.put("word64PlusRead", 8);
+        result.put("int32PlusRead", 4);
         return result;
     }
     private final List<Long> nativeSeeds = List.of(Long.MIN_VALUE, -4294967296L, -2147483649L, -2147483648L, -1L, 0L,
@@ -38,8 +40,8 @@ class ManagedAddressReadTest {
     private long nativeRead(String name, ByteBuffer bytes, int start) {
         return switch (name) {
             case "word32Read" -> bytes.getInt(start) & 0xffffffffL;
-            case "wordRead", "intRead" -> bytes.getLong(start);
-            case "int32Read" -> bytes.getInt(start);
+            case "wordRead", "intRead", "word64PlusRead" -> bytes.getLong(start);
+            case "int32Read", "int32PlusRead" -> bytes.getInt(start);
             default -> throw new IllegalStateException("Unknown native address read " + name);
         };
     }
@@ -100,7 +102,7 @@ class ManagedAddressReadTest {
         var manifest = (Map<String, Object>) Json.parse(
             Files.readString(new File(root, "build/managed-address-reads/manifest.json").toPath()));
         assertEquals(true, manifest.get("strictAccepted"));
-        assertEquals(8L, manifest.get("strictAudits"));
+        assertEquals(12L, manifest.get("strictAudits"));
         assertEquals(64L, manifest.get("wordBits"));
         for (var kind : List.of("inputHashes", "artifactHashes"))
             for (var item : ((Map<String, String>) manifest.get(kind)).entrySet()) {
@@ -115,8 +117,8 @@ class ManagedAddressReadTest {
         assertEquals(nativeEntries.keySet(), rows.keySet());
         int count = 0;
         for (var cases : rows.values()) count += cases.size();
-        assertEquals(1800, count);
-        assertEquals(1800L, manifest.get("nativeRows"));
+        assertEquals(2700, count);
+        assertEquals(2700L, manifest.get("nativeRows"));
         var requests = new ArrayList<List<String>>();
         for (var entry : nativeEntries.entrySet())
             for (long raw : nativeSeeds)
@@ -152,7 +154,8 @@ class ManagedAddressReadTest {
             assertEquals(
                 stage.equals("pre") ? "optimized-Core-before-Tidy" : "optimized-Core-after-Tidy-before-CorePrep",
                 fixture.get("boundary"));
-            var primitives = List.of("readWord32OffAddr#", "readWordOffAddr#", "readInt32OffAddr#", "readIntOffAddr#");
+            var primitives = List.of("readWord32OffAddr#", "readWordOffAddr#", "readInt32OffAddr#", "readIntOffAddr#",
+                "readWord64OffAddr#", "readInt32OffAddr#");
             int i = 0;
             for (var name : nativeEntries.keySet()) {
                 var primitive = primitives.get(i++);
@@ -178,6 +181,11 @@ class ManagedAddressReadTest {
                             var function = context.asValue(new EntryValue(runtime, "main:ManagedAddressReadAudit." + name, 3));
                             var label = stage + "/" + backend;
                             for (var row : cases) checkNative(row, function, language, label);
+                            if (backend.equals("bytecode"))
+                                // Only readXOffAddr# (plusAddr# a d) 0# lowers to the fused read, which
+                                // must not build the offset address.
+                                assertEquals(name.endsWith("PlusRead"),
+                                    function.getMember("bytecode").asString().contains("c.ReadManagedAddressPlus"), label + "/" + name);
                             assertTrue(function.invokeMember("compile").asBoolean());
                             for (var row : cases.reversed()) {
                                 long before = ((Number) runtime.diagnostics().get("compiledEntries")).longValue();

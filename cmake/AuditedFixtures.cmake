@@ -155,7 +155,7 @@ audited_fixture(small-arrays SmallArrayAudit
 # 050: typed reads through managed addresses use these two declared CBDs only.
 set(managed_reports)
 foreach(stage pre post)
-  foreach(entry word32Read wordRead int32Read intRead)
+  foreach(entry word32Read wordRead int32Read intRead word64PlusRead int32PlusRead)
     list(APPEND managed_reports "${stage}-${entry}.audit.json")
   endforeach()
 endforeach()
