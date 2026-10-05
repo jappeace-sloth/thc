@@ -43,6 +43,7 @@ complete Core, cabal 3.16.1, clang 18.1.8, GraalVM 25.3.4.1.
 | launcher settings overridable (ekmett/thc#1138) | baseline | 65/65 | 40.2 s | 177.4 s, 2267 s CPU | 337 GB |
 | liveness without the lock | no new failures | 65/65 | 40.3 s | 136.5 s, 1853 s CPU | 341 GB |
 | scalar reads in one locked load | no new failures | 65/65 | 35.6 s | 117.5 s, 1483 s CPU | 270 GB |
+| launcher metrics only for diagnostics | no new failures | 65/65 | 38.4 s | 82.5 s, 969 s CPU | 271 GB |
 
 Allocation is the heap growth between collections summed over a
 `-Xlog:gc` log of the same run.
@@ -76,3 +77,21 @@ failing free      counter   blocked, then LIVE
 
 The flag version failed `AtomicAddressTest.pointerValidationDoesNotHoldCellMonitorBehindQueuedNativeFree`
 in the address gate, which is how the queued case was found.
+
+## Scalar reads in one locked load
+
+The commit message says `Owner.readScalar` allocates nothing. It allocates
+no `Borrow`, but the read lock it takes allocates a hold record (32 bytes
+per acquisition) whenever the reading thread is not the lock's first
+reader, that is, while another thread is reading the same allocation. In
+1br every chunk buffer has one reader, so this run does not show it.
+
+## Launcher metrics
+
+A steady-state JFR profile of a billion-row run with the scalar-read
+change attributed 3.8% of CPU samples to `AtomicLong.incrementAndGet`
+in `Metrics.incrementTailBounces`: the launcher enabled THC's metrics on
+every IO launch although it prints them only under `-Dthc.diagnostics`.
+Turning them off unless requested saved 30% of wall time on this base
+(21% on the earlier one), far more than the samples suggested, because
+sixteen threads were contending for the same counters' cache lines.
