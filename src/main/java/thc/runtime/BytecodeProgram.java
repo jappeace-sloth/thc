@@ -185,6 +185,11 @@ public final class BytecodeProgram implements ExecutableProgram {
         boolean directLong() { return !cell && proof.isLong() && proof.getEvaluated(); }
         boolean directFloat() { return !cell && proof.isFloat() && proof.getEvaluated(); }
         boolean directDouble() { return !cell && proof.isDouble() && proof.getEvaluated(); }
+        /**
+         * The cached frame tag this local starts with. An Illegal tag is learnt by the first
+         * store, and when that store comes after the root was compiled it invalidates the code.
+         */
+        FrameSlotKind initialKind() { return cell ? FrameSlotKind.Object : FrameLayout.carrierKind(proof); }
     }
 
     private record VectorCapture(CoreRepresentation proof, List<Local> destinations) {}
@@ -1051,7 +1056,7 @@ public final class BytecodeProgram implements ExecutableProgram {
                     info = FrameSlotKind.Object;
                 } else {
                     // Initial carrier metadata does not make a multi-write local static.
-                    info = local.cell ? FrameSlotKind.Object : FrameLayout.carrierKind(local.proof);
+                    info = local.initialKind();
                 }
                 e.locals.put(local.id, b.createLocal(local.name, info));
             }
@@ -3424,7 +3429,8 @@ public final class BytecodeProgram implements ExecutableProgram {
         b.beginStaticStoreObject(fn); requireClosure(function).emit(e); b.endStaticStoreObject();
         var values = new ArrayList<BytecodeLocal>();
         if (layout != null && layout.getRequiresTyped()) {
-            for (int i = 0; i < layout.getPhysicalArity(); ++i) values.add(b.createLocal("captured typed input " + i, null));
+            for (int i = 0; i < layout.getPhysicalArity(); ++i)
+                values.add(b.createLocal("captured typed input " + i, FrameLayout.carrierKind(layout.getPhysicalProofs()[i])));
             for (int i = 0; i < arguments.size(); ++i) {
                 var argument = arguments.get(i);
                 int offset = layout.offset(i);
@@ -3813,7 +3819,8 @@ public final class BytecodeProgram implements ExecutableProgram {
                 var argument = arguments.get(i);
                 var slots = new ArrayList<BytecodeLocal>();
                 for (int lane = 0; lane < target.locals.get(i).size(); ++lane)
-                    slots.add(b.createLocal("join operand " + i + " lane " + lane, null));
+                    slots.add(b.createLocal("join operand " + i + " lane " + lane,
+                        FrameLayout.carrierKind(target.locals.get(i).get(lane).proof)));
                 if (CoreRepresentations.binder(target.parameters.get(i)).isTypedTransport()) argument.emitTuple(e, slots);
                 else {
                     if (slots.size() != 1) throw new IllegalArgumentException("List has more than one element.");
@@ -4085,16 +4092,15 @@ public final class BytecodeProgram implements ExecutableProgram {
             }
             var b = e.builder;
             b.beginBlock();
-            var result = destination == null ? b.createLocal("join result", null) : null;
-            var selector = recursive ? b.createLocal("join selector", "primitive") : null;
+            var result = destination == null ? b.createLocal("join result", FrameLayout.carrierKind(proof)) : null;
+            var selector = recursive ? b.createLocal("join selector", FrameSlotKind.Long) : null;
             var exit = b.createLabel();
             var storage = new LinkedHashMap<Integer, Local>();
             for (var target : region.targets) {
                 for (var fields : target.locals) for (var field : fields) storage.put(field.id, field);
                 for (var capture : target.captures) storage.put(capture.destination.id, capture.destination);
             }
-            for (var field : storage.values())
-                e.locals.put(field.id, b.createLocal(field.name, field.primitive ? "primitive" : "object"));
+            for (var field : storage.values()) e.locals.put(field.id, b.createLocal(field.name, field.initialKind()));
             if (selector != null) {
                 b.beginStoreLocal(selector); b.emitLoadConstant(-1L); b.endStoreLocal();
                 b.beginWhile(); b.emitLoadConstant(true); b.beginBlock();
@@ -5143,7 +5149,7 @@ public final class BytecodeProgram implements ExecutableProgram {
         return new ProvenExpression(new ResultExpression((e, destination) -> {
             var b = e.builder;
             b.beginBlock();
-            for (var field : fields) e.locals.put(field.id, b.createLocal(field.name, field.primitive ? "primitive" : "object"));
+            for (var field : fields) e.locals.put(field.id, b.createLocal(field.name, field.initialKind()));
             scrutinee.emitTuple(e, localSlots(e, fields));
             b.beginStoreLocal(e.locals.get(fields.getFirst().id));
             b.beginCheckSumTag(proof.getAlternatives().size());
@@ -5499,7 +5505,9 @@ public final class BytecodeProgram implements ExecutableProgram {
         return new ProvenExpression(new ResultExpression((e, destination) -> {
             var b = e.builder;
             b.beginBlock();
-            for (var slot : physicalSlots) e.locals.put(slot.id, b.createLocal(slot.name, slot.primitive ? "primitive" : "object"));
+            // A recursive group stores each slot's cell before its value.
+            for (var slot : physicalSlots)
+                e.locals.put(slot.id, b.createLocal(slot.name, recursive ? FrameSlotKind.Object : slot.initialKind()));
             if (recursive) {
                 for (var slot : physicalSlots) {
                     b.beginStoreLocal(e.locals.get(slot.id)); b.emitNewCell(); b.endStoreLocal();
