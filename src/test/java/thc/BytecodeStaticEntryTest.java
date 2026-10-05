@@ -117,6 +117,36 @@ class BytecodeStaticEntryTest {
         var expr = list("lam", list(binder), list("var", "x", map("rep", rep)), map("rep", map("kind", "closure", "evaluated", true, "primReps", list("BoxedRep (Just Lifted)")), "resultRep", rep));
         return new BytecodeProgram(language, map("bindings", list(map("id", "f", "name", "f", "arity", 1L, "lifted", true, "expr", expr)), "constructors", list()), async);
     }
+    private static final Map<String, Object> WIDE = map("kind", "long", "primReps", list("IntRep"), "evaluated", true);
+    private static final Map<String, Object> CLOSURE = map("kind", "closure", "evaluated", true, "primReps", list("BoxedRep (Just Lifted)"));
+    private static Object wideBinder(String id) { return map("id", id, "name", id, "lifted", false, "rep", WIDE); }
+    private static Object wideVariable(String id) { return list("var", id, map("rep", WIDE)); }
+    private static Object wideLiteral(long value) { return list("lit", "int", Long.toString(value), map("rep", WIDE)); }
+    private static Object widePrimitive(String name, Object left, Object right) {
+        return list("app", list("prim", name), list(left, right), list(false, false), false, false, map("rep", WIDE));
+    }
+    /** {@code f x = join j y = y +# 1# in jump j (x *# 2#)} */
+    private BytecodeProgram joinProgram(Language language, boolean async) {
+        var join = map("id", "j", "name", "j", "lifted", true, "rep", CLOSURE, "joinValueArity", 1, "joinResultRep", WIDE,
+            "expr", list("lam", list(wideBinder("y")), widePrimitive("+#", wideVariable("y"), wideLiteral(1)), map("rep", CLOSURE, "resultRep", WIDE)));
+        var jump = list("app", list("var", "j", map("rep", CLOSURE)), list(widePrimitive("*#", wideVariable("x"), wideLiteral(2))),
+            list(false), false, false, map("rep", WIDE));
+        var expr = list("lam", list(wideBinder("x")), list("let", false, list(join), jump, map("rep", WIDE)), map("rep", CLOSURE, "resultRep", WIDE));
+        return new BytecodeProgram(language, map("bindings", list(map("id", "f", "name", "f", "arity", 1L, "lifted", true, "expr", expr)), "constructors", list()), async);
+    }
+    // An invocation that entered the interpreter before the root was installed stores to the join's
+    // locals afterwards; learning their tags there would invalidate the installed code.
+    @Test void interpretedJumpAfterInstallationKeepsTheCompiledRoot() throws Exception {
+        withLanguage(language -> {
+            for (boolean async : list(false, true)) {
+                var target = joinProgram(language, async).entryTarget("f"); var root = (BytecodeRoot) target.getRootNode();
+                compile(target);
+                var frame = Truffle.getRuntime().createVirtualFrame(new Object[]{0L, 5L}, root.getFrameDescriptor());
+                assertEquals(11L, root.execute(frame), "async " + async);
+                valid(target);
+            }
+        });
+    }
     @Test void compilerCertifiesExactMarkersAndKeepsUnknownAndNarrowInputsOutOfWideSlots() throws Exception {
         withLanguage(language -> {
             for (Object marker : list(FrameSlotKind.Long, FrameSlotKind.Int, FrameSlotKind.Float, FrameSlotKind.Double,

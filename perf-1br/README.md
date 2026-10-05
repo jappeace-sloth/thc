@@ -45,12 +45,14 @@ complete Core, cabal 3.16.1, clang 18.1.8, GraalVM 25.3.4.1.
 | scalar reads in one locked load | no new failures | 65/65 | 35.6 s | 117.5 s, 1483 s CPU | 270 GB |
 | launcher metrics only for diagnostics | no new failures | 65/65 | 38.4 s | 82.5 to 92.4 s (mean 87.0), 969 s CPU | 271 GB |
 | plusAddr# reads without the offset address | no new failures | 65/65 | 33.2 s | 73.1 to 85.7 s (mean 78.7), 908 s CPU | 90 GB |
+| join and capture locals start with their carrier's tag | no new failures | 65/65 | 35.5 s | 66.7 to 98.4 s (mean 82.0), 936 s CPU | 95 GB |
 
 Allocation is the heap growth between collections summed over a
 `-Xlog:gc` log of the same run. On this base single billion-row runs
-vary by several seconds, so the last two rows give three cold runs each,
-four of them alternating between the two runtimes with three idle
-minutes before each; CPU and allocation are from the gate's run.
+vary by several seconds, so the rows from the plusAddr# commit on give
+three or more cold runs each, most of them alternating with the previous
+commit's runtime, three idle minutes before each; CPU and allocation are
+from the gate's run.
 
 ## Liveness without the lock
 
@@ -99,3 +101,21 @@ every IO launch although it prints them only under `-Dthc.diagnostics`.
 Turning them off unless requested saved 30% of wall time on this base
 (21% on the earlier one), far more than the samples suggested, because
 sixteen threads were contending for the same counters' cache lines.
+
+## Join and capture locals start typed
+
+The chunk loop's root was invalidated once per run with "local tags
+updated" and compiled again. An instrumented copy of the generated
+`BytecodeRootGen` logged every cached-tag change: the invalidating ones
+were first stores, by a thread still interpreting the root after its
+compilation was installed, to `captured typed input N`, `join result` and
+`join operand N lane N`, all created without a `FrameSlotKind`. Three
+probes after the change showed no such invalidation. Besides both gates,
+the 22 JUnit classes that build join points and belong to neither pass in
+both modes (248 cases each).
+
+The wall time does not show it with OSR off: four cold runs gave 66.7 to
+98.4 s against 80.0 to 85.3 s for the previous commit, the spread coming
+from when the chunk loop's compilations land. With OSR on and the size
+limit of the next commit passed by hand, three alternating pairs gave a
+mean of 68.5 s against 72.0 s, this commit faster in two of the three.
