@@ -53,6 +53,9 @@ public final class ManagedNativeAllocations {
         private volatile Throwable retirementFailure;
         private boolean arenaClosed;
         private volatile boolean retired;
+        // Set before any free or retirement reaches the lifetime lock, and never cleared. While it
+        // is unset no writer holds or waits for the lock and nothing has closed the allocation.
+        private volatile boolean releaseRequested;
         private final MethodHandle deallocator;
 
         Owner(MemorySegment pointer, long size) { this(pointer, size, Allocator.MALLOC); }
@@ -122,6 +125,7 @@ public final class ManagedNativeAllocations {
             }
         }
         void requestRetirement() {
+            releaseRequested = true;
             synchronized (ManagedNativeAllocations.this) {
                 if (ManagedNativeAllocations.this.closed || !live.contains(this)) return;
                 pendingRetirement = true;
@@ -155,6 +159,7 @@ public final class ManagedNativeAllocations {
         @TruffleBoundary
         void release() {
             requireFreeable();
+            releaseRequested = true;
             lifetime.writeLock().lock();
             try {
                 reportRetirementFailure();
@@ -177,7 +182,15 @@ public final class ManagedNativeAllocations {
             } finally { lifetime.writeLock().unlock(); }
         }
 
-        @TruffleBoundary public void requireLive() { try (var ignored = borrow()) {} }
+        /**
+         * Answers without the lock until a free or retirement has been requested, when a borrow
+         * could not fail or wait. Afterwards it borrows, so it still waits behind a queued free.
+         */
+        @TruffleBoundary public void requireLive() {
+            current();
+            if (!releaseRequested) return;
+            try (var ignored = borrow()) {}
+        }
         @TruffleBoundary public <T> T access(Function<MemorySegment, T> body) {
             try (var loan = borrow()) { return body.apply(loan.segment()); }
         }
