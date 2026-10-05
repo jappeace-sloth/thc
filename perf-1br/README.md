@@ -42,6 +42,7 @@ complete Core, cabal 3.16.1, clang 18.1.8, GraalVM 25.3.4.1.
 |--------|-----------|-----------|---------------|-----------|--------------|
 | launcher settings overridable (ekmett/thc#1138) | baseline | 65/65 | 40.2 s | 177.4 s, 2267 s CPU | 337 GB |
 | liveness without the lock | no new failures | 65/65 | 40.3 s | 136.5 s, 1853 s CPU | 341 GB |
+| scalar reads in one locked load | no new failures | 65/65 | 35.6 s | 117.5 s, 1483 s CPU | 270 GB |
 
 Allocation is the heap growth between collections summed over a
 `-Xlog:gc` log of the same run.

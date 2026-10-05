@@ -485,6 +485,43 @@ public class NativeMallocTest {
             assertEquals(0, registry.liveCount());
         });
     }
+    private static long scalarRead(ManagedAddressRead operation, ManagedAddress address, long offset) {
+        return operation.isInt() ? operation.readInt(address, offset) : operation.read(address, offset);
+    }
+    @Test
+    public void nativeScalarReadsMatchTheByteArrayPathAtEveryWidthOffsetAndBound() throws Exception {
+        inside(language -> {
+            var registry = Language.currentState().getNativeAllocations();
+            var base = registry.malloc(32);
+            var bytes = new byte[32];
+            for (int i = 0; i < bytes.length; i++) {
+                bytes[i] = (byte) (i * 37 + 129);
+                base.writeWord8(i, bytes[i] & 255);
+            }
+            var heap = ManagedAddress.fromByteArray(bytes);
+            for (var operation : ManagedAddressRead.values()) {
+                int width = operation.getWidth();
+                for (int start = 0; start <= bytes.length; start++) {
+                    var nativeAddress = base.plus(start);
+                    var heapAddress = heap.plus(start);
+                    for (long o = -9; o <= 9; o++) {
+                        final long offset = o;
+                        long at = start + offset * width;
+                        if (at >= 0 && at + width <= bytes.length)
+                            assertEquals(scalarRead(operation, heapAddress, offset),
+                                scalarRead(operation, nativeAddress, offset), operation + "/" + start + "/" + offset);
+                        else
+                            assertThrows(RuntimeFault.class, () -> scalarRead(operation, nativeAddress, offset));
+                    }
+                    for (long offset : new long[] {Long.MIN_VALUE, Long.MAX_VALUE, 1L << 32, -(1L << 32)})
+                        assertThrows(RuntimeFault.class, () -> scalarRead(operation, nativeAddress, offset));
+                }
+            }
+            registry.free(base);
+            for (var operation : ManagedAddressRead.values())
+                assertThrows(RuntimeFault.class, () -> scalarRead(operation, base, 0));
+        });
+    }
     @Test
     public void windowsCrtErrnoIsCapturedOnTheCallingThreadWithoutChangingLastError() throws Exception {
         assumeTrue(WindowsDirectoryStreams.supportedHost());
