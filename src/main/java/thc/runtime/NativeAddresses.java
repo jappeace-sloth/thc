@@ -18,17 +18,22 @@ public final class NativeAddresses {
     private final TreeMap<Long, WeakReference<NativeReadOnlyImage>> ranges = new TreeMap<>(Long::compareUnsigned);
     private final TreeMap<Long, WeakReference<ManagedAllocation>> pinned = new TreeMap<>(Long::compareUnsigned);
     private boolean closed;
+    // reap walks every entry, so a projection reaps only once the tables have doubled since the
+    // last reap. recover still reaps first: a dead entry can shadow the live allocation below it.
+    private static final int MINIMUM_REAP_THRESHOLD = 64;
+    private int reapThreshold = MINIMUM_REAP_THRESHOLD;
     public NativeAddresses(TruffleLanguage.Env env) { this.env = env; }
     private void requireOpen() { if (closed) throw fault("Native address registry is closed"); }
     private void reap() {
         images.size(); // Drain backing keys before resolving numeric ranges.
         ranges.entrySet().removeIf(entry -> { var image = entry.getValue().get(); return image == null || !image.hasSource(); });
         pinned.entrySet().removeIf(entry -> entry.getValue().get() == null);
+        reapThreshold = Math.max(MINIMUM_REAP_THRESHOLD, 2 * (ranges.size() + pinned.size()));
     }
     @TruffleBoundary public synchronized long project(ManagedAddress address) {
         requireOpen();
         if (!env.isNativeAccessAllowed()) throw fault("Native address projection requires native access");
-        reap();
+        if (ranges.size() + pinned.size() >= reapThreshold) reap();
         var owner = address.cbitsOwner();
         var segment = owner == null ? null : owner.nativeSegment();
         if (segment != null) {
