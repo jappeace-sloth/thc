@@ -53,6 +53,9 @@ public final class ManagedNativeAllocations {
         private volatile Throwable retirementFailure;
         private boolean arenaClosed;
         private volatile boolean retired;
+        // Set before any free or retirement reaches the lifetime lock, and never cleared. While it
+        // is unset no writer holds or waits for the lock and nothing has closed the allocation.
+        private volatile boolean releaseRequested;
         private final MethodHandle deallocator;
 
         Owner(MemorySegment pointer, long size) { this(pointer, size, Allocator.MALLOC); }
@@ -122,6 +125,7 @@ public final class ManagedNativeAllocations {
             }
         }
         void requestRetirement() {
+            releaseRequested = true;
             synchronized (ManagedNativeAllocations.this) {
                 if (ManagedNativeAllocations.this.closed || !live.contains(this)) return;
                 pendingRetirement = true;
@@ -155,6 +159,7 @@ public final class ManagedNativeAllocations {
         @TruffleBoundary
         void release() {
             requireFreeable();
+            releaseRequested = true;
             lifetime.writeLock().lock();
             try {
                 reportRetirementFailure();
@@ -177,7 +182,15 @@ public final class ManagedNativeAllocations {
             } finally { lifetime.writeLock().unlock(); }
         }
 
-        @TruffleBoundary public void requireLive() { try (var ignored = borrow()) {} }
+        /**
+         * Answers without the lock until a free or retirement has been requested, when a borrow
+         * could not fail or wait. Afterwards it borrows, so it still waits behind a queued free.
+         */
+        @TruffleBoundary public void requireLive() {
+            current();
+            if (!releaseRequested) return;
+            try (var ignored = borrow()) {}
+        }
         @TruffleBoundary public <T> T access(Function<MemorySegment, T> body) {
             try (var loan = borrow()) { return body.apply(loan.segment()); }
         }
@@ -186,6 +199,34 @@ public final class ManagedNativeAllocations {
         }
         @TruffleBoundary public long accessLong(ToLongFunction<MemorySegment> body) {
             try (var loan = borrow()) { return body.applyAsLong(loan.segment()); }
+        }
+        /**
+         * The unsigned native-endian value of {@code width} bytes at {@code elementOffset *
+         * stride} past {@code base}, with a borrowed read's checks in its order (liveness,
+         * offset overflow, bounds), holding the read lock only for the load and allocating
+         * no Borrow. Like closing a borrow, it retries a pending retirement after unlocking.
+         */
+        @TruffleBoundary public long readScalar(long base, long elementOffset, int stride, int width) {
+            current();
+            var lock = lifetime.readLock();
+            lock.lock();
+            try {
+                requireNotRetired();
+                if (elementOffset < Long.MIN_VALUE / stride || elementOffset > Long.MAX_VALUE / stride)
+                    throw fault("Managed Addr# element offset overflow");
+                long start;
+                try { start = Math.addExact(base, elementOffset * stride); }
+                catch (ArithmeticException failure) { throw fault("Managed Addr# offset overflow"); }
+                if (start < 0 || start > size || width > size - start)
+                    throw fault("Managed Addr# range outside its backing storage");
+                return switch (width) {
+                    case 1 -> segment.get(ValueLayout.JAVA_BYTE, start) & 0xffL;
+                    case 2 -> segment.get(ValueLayout.JAVA_SHORT_UNALIGNED, start) & 0xffffL;
+                    case 4 -> segment.get(ValueLayout.JAVA_INT_UNALIGNED, start) & 0xffff_ffffL;
+                    case 8 -> segment.get(ValueLayout.JAVA_LONG_UNALIGNED, start);
+                    default -> throw fault("Unsupported native scalar width " + width);
+                };
+            } finally { lock.unlock(); retryRetirement(); }
         }
     }
 

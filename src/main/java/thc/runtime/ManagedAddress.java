@@ -76,6 +76,15 @@ public final class ManagedAddress {
     public boolean isNativeBase() { return nativeOwner != null && offset == 0; }
     // A nullable resource preserves the original no-native-owner loan without a wrapper.
     ManagedNativeAllocations.Owner.Borrow borrow() { return nativeOwner == null ? null : nativeOwner.borrow(); }
+    /** Plain malloc'd storage, whose owner serves a scalar read in one locked load. */
+    boolean plainNativeStorage() {
+        return nativeOwner != null && rtsFlags == null && capabilities == null && heap == null &&
+            foreign == null && compiler == null;
+    }
+    // Passes only primitives across the owner's boundary, so this address need not escape.
+    long readNativeScalar(long elementOffset, int stride, int width) {
+        return nativeOwner.readScalar(offset, elementOffset, stride, width);
+    }
     public <T> T withNativeBorrow(Supplier<T> body) {
         try (var loan = borrow()) { return body.get(); }
     }
