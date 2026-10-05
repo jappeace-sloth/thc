@@ -162,7 +162,12 @@ requireBuild(compactObjectHeaders == "true" || compactObjectHeaders == "false") 
 def compactHeaderOption = "-XX:${compactObjectHeaders == "true" ? "+" : "-"}UseCompactObjectHeaders"
 application {
     mainClass.set("thc.Main")
-    applicationDefaultJvmArgs = ["--add-modules=jdk.incubator.vector", "--enable-native-access=ALL-UNNAMED", "--add-opens=java.base/java.lang=ALL-UNNAMED", "-Xss2m", compactHeaderOption] +
+    applicationDefaultJvmArgs = ["--add-modules=jdk.incubator.vector", "--enable-native-access=ALL-UNNAMED", "--add-opens=java.base/java.lang=ALL-UNNAMED", "-Xss2m", compactHeaderOption,
+        // Decision: JVMCI refuses to install code over 640 KB. Under a raised graph budget the OSR
+        // variant of a large loop exceeds that, and graph recovery then replaces the root whose own
+        // compilation installed. 16 MB leaves the graph budget as the bound; keeping OSR off or
+        // lowering the budget instead leaves such loops interpreted or split.
+        "-XX:JVMCINMethodSizeLimit=16777216"] +
         // The POSIX standalone guest owns GHC's supported process handlers.
         // Embedders do not inherit these launcher JVM arguments.
         (System.getProperty("os.name") == "Linux" || System.getProperty("os.name").startsWith("Mac") ? ["-Xrs"] : [])

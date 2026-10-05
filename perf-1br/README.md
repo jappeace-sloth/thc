@@ -33,7 +33,9 @@ complete Core, cabal 3.16.1, clang 18.1.8, GraalVM 25.3.4.1.
 - 1br's test suite through THC (65 cases, 13 of them through THC), then
   wall and CPU time of 10M rows with THC's defaults and of a billion rows
   with `-Dpolyglot.compiler.MaximumGraalGraphSize=400000
-  -Dpolyglot.engine.OSR=false`, after three idle minutes. Every report is
+  -Dpolyglot.engine.OSR=false`, after three idle minutes. From the commit
+  that lets compilations over 640 KB install, the billion-row run keeps
+  OSR on and passes only the graph budget. Every report is
   compared byte for byte with native GHC's.
 
 ## Results
@@ -46,6 +48,7 @@ complete Core, cabal 3.16.1, clang 18.1.8, GraalVM 25.3.4.1.
 | launcher metrics only for diagnostics | no new failures | 65/65 | 38.4 s | 82.5 to 92.4 s (mean 87.0), 969 s CPU | 271 GB |
 | plusAddr# reads without the offset address | no new failures | 65/65 | 33.2 s | 73.1 to 85.7 s (mean 78.7), 908 s CPU | 90 GB |
 | join and capture locals start with their carrier's tag | no new failures | 65/65 | 35.5 s | 66.7 to 98.4 s (mean 82.0), 936 s CPU | 95 GB |
+| compilations over 640 KB install (tuned run with OSR on) | no new failures | 65/65 | 32.7 s | 64.4 to 76.8 s (mean 70.7), 914 s CPU | 102 GB |
 
 Allocation is the heap growth between collections summed over a
 `-Xlog:gc` log of the same run. On this base single billion-row runs
@@ -119,3 +122,39 @@ The wall time does not show it with OSR off: four cold runs gave 66.7 to
 from when the chunk loop's compilations land. With OSR on and the size
 limit of the next commit passed by hand, three alternating pairs gave a
 mean of 68.5 s against 72.0 s, this commit faster in two of the three.
+
+## Where a billion-row run spends its time
+
+A JFR recording of the join-locals commit with OSR off, read with
+[ClassifySamples.java](ClassifySamples.java), shows every worker thread
+going through the same phases:
+
+- 2 to 9 s: `newTable`'s `setPrimArray`, a C memset that Sulong runs over
+  the pinned table, each store converting the buffer to a pointer through
+  `NativeAddresses.project`.
+- 9 to 33 s: the first chunk, interpreted. The chunk loop is entered once
+  per 27 MB chunk, and with OSR off an invocation that started in the
+  interpreter stays there until it returns, however soon its root is
+  compiled. 16 of the 512 chunks take a third of the run.
+- 33 to 60 s: compiled.
+- Then the main thread merges the sixteen tables for 9 s, most of it in
+  `NativeAddresses.reap`.
+
+The root's first compilation is hardly used: it lands while every thread
+is still in its first chunk, before any chunk has ended, and the first
+thread to finish a chunk in it deoptimizes at the loop's exit.
+
+## Compilations over 640 KB install
+
+With the 400 000-node budget the chunk loop's OSR code is 873 to 904 KB,
+over JVMCI's 640 KB default, so its install failed and graph recovery
+replaced the root; that is why the tuned runs above keep OSR off. With
+the launcher raising the limit, three alternating pairs against the
+join-locals commit with OSR off gave 64.4, 66.8 and 74.8 s against 74.0,
+78.5 and 78.1 s.
+
+Not committed: projecting a pinned C buffer once per foreign call (branch
+`parked-pinned-base`) takes the start-up memset from 6 s to under 1 s
+per worker, but three alternating pairs showed no change in wall or CPU
+time. The workers reached their first chunk sooner and interpreted it
+for correspondingly longer.
